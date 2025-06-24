@@ -17,6 +17,8 @@ class Block_Editor {
 		add_action( 'rest_api_init', array( __CLASS__, 'register_api_endpoints' ) );
 		add_action( 'rest_api_init', array( __CLASS__, 'register_meta' ) );
 		add_filter( 'default_post_metadata', array( __CLASS__, 'get_default_meta' ), 10, 4 );
+		add_filter( 'add_post_metadata', array( __CLASS__, 'maybe_skip_save_meta' ), 10, 4 );
+		add_filter( 'update_post_metadata', array( __CLASS__, 'maybe_skip_save_meta' ), 10, 4 );
 	}
 
 	/**
@@ -159,8 +161,8 @@ class Block_Editor {
 					)
 				);
 
+				// No need to register (and thus save) anything we won't be using.
 				if ( ! empty( $options['custom_status_field'] ) ) {
-					// No need to register (and thus save) anything we won't be using.
 					register_post_meta(
 						$post_type,
 						'_share_on_mastodon_status',
@@ -180,6 +182,29 @@ class Block_Editor {
 								$status = sanitize_textarea_field( $status );
 								$status = preg_replace( '~\R~u', "\r\n", $status );
 								return $status;
+							},
+						)
+					);
+				}
+
+				if ( ! empty( $options['content_warning'] ) ) {
+					register_post_meta(
+						$post_type,
+						'_share_on_mastodon_cw',
+						array(
+							'single'            => true,
+							'show_in_rest'      => true,
+							'type'              => 'string',
+							'default'           => '',
+							'auth_callback'     => function ( $allowed, $meta_key, $post_id ) {
+								if ( empty( $post_id ) || ! ctype_digit( (string) $post_id ) ) {
+									return false;
+								}
+
+								return current_user_can( 'edit_post', $post_id );
+							},
+							'sanitize_callback' => function ( $content_warning ) {
+								return sanitize_text_field( $content_warning );
 							},
 						)
 					);
@@ -217,5 +242,28 @@ class Block_Editor {
 		return ! $single
 			? array( $default )
 			: $default;
+	}
+
+	/**
+	 * Bypasses saving post meta when doing so would not have any effect.
+	 *
+	 * @param  mixed  $check      Whether to allow updating metadata for the given type.
+	 * @param  int    $object_id  Object ID.
+	 * @param  string $meta_key   Meta key.
+	 * @param  mixed  $meta_value Metadata value.
+	 * @return mixed              Whether to allow updating metadata for the given type. A _non-null_ value will bypass updating.
+	 */
+	public static function maybe_skip_save_meta( $check, $object_id, $meta_key, $meta_value ) {
+		if ( '_share_on_mastodon_status' === $meta_key && '' === $meta_value && null === get_metadata_raw( 'post', $object_id, $meta_key, true ) ) {
+			// No current value exists, but the new value would equal the default. No need to save, then.
+			return true;
+		}
+
+		if ( '_share_on_mastodon_cw' === $meta_key && '' === $meta_value && null === get_metadata_raw( 'post', $object_id, $meta_key, true ) ) {
+			// No current value exists, but the new value would equal the default. No need to save, then.
+			return true;
+		}
+
+		return $check;
 	}
 }

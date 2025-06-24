@@ -54,12 +54,14 @@ class Post_Handler {
 			return;
 		}
 
+		$options = get_options();
+
+		// Sanitize custom status, if any.
 		if ( isset( $_POST['share_on_mastodon_status'] ) ) {
 			$status = sanitize_textarea_field( wp_unslash( $_POST['share_on_mastodon_status'] ) );
 			$status = preg_replace( '~\R~u', "\r\n", $status );
 		}
 
-		$options = get_options();
 		if (
 			! empty( $status ) && '' !== preg_replace( '~\s~', '', $status ) &&
 			( empty( $options['status_template'] ) || $status !== $options['status_template'] )
@@ -69,6 +71,19 @@ class Post_Handler {
 		} else {
 			// Ignore, or delete a previously stored value.
 			delete_post_meta( $post->ID, '_share_on_mastodon_status' );
+		}
+
+		// Sanitize CW, if any.
+		if ( isset( $_POST['share_on_mastodon_cw'] ) ) {
+			$content_warning = sanitize_text_field( wp_unslash( $_POST['share_on_mastodon_cw'] ) );
+		}
+
+		if ( ! empty( $content_warning ) && '' !== preg_replace( '~\s~', '', $content_warning ) ) {
+			// Save only if `$content_warning` is non-empty and.
+			update_post_meta( $post->ID, '_share_on_mastodon_cw', $content_warning );
+		} else {
+			// Ignore, or delete a previously stored value.
+			delete_post_meta( $post->ID, '_share_on_mastodon_cw' );
 		}
 
 		if ( isset( $_POST['share_on_mastodon'] ) && ! post_password_required( $post ) ) {
@@ -90,6 +105,7 @@ class Post_Handler {
 
 		if ( 0 === strpos( current_action(), 'save_' ) && defined( 'REST_REQUEST' ) && REST_REQUEST ) {
 			// For REST requests, we use a *later* hook, which runs *after* metadata, if any, has been saved.
+			debug_log( "[Share on Mastodon] Delaying scheduling to `rest_after_insert_{$post->post_type}`." );
 			add_action( "rest_after_insert_{$post->post_type}", array( $this, 'toot' ), 20 );
 
 			// Don't do anything just yet.
@@ -97,10 +113,20 @@ class Post_Handler {
 		}
 
 		$options = get_options();
-		if ( ! empty( $options['meta_box'] && $this->is_gutenberg() && empty( $_REQUEST['meta-box-loader'] ) ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		if ( ! empty( $options['meta_box'] ) && $this->is_gutenberg() && empty( $_REQUEST['meta-box-loader'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
 			// This has to be the first of *two* "Gutenberg requests," and we should ignore it. Note: It could be that
 			// `$this->is_gutenberg()` always returns `false` whenever `$_REQUEST['meta-box-loader']` is present.
 			// Still, doesn't hurt to check.
+			debug_log( '[Share on Mastodon] First of two expected requests. Quitting.' );
+
+			return;
+		}
+
+		if ( empty( $options['meta_box'] ) && ! empty( $_REQUEST['meta-box-loader'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+			// This has to be that second "Gutenberg request," and *because we ourselves don't rely on a "classic" meta
+			// box*, it should be safe to ignore it.
+			debug_log( '[Share on Mastodon] Second, yet irrelevant (to us) request. Quitting.' );
+
 			return;
 		}
 
@@ -110,6 +136,7 @@ class Post_Handler {
 		}
 
 		if ( ! $this->setup_completed( $post ) ) {
+			debug_log( '[Share on Mastodon] Setup incomplete.' );
 			return;
 		}
 
@@ -146,6 +173,7 @@ class Post_Handler {
 		}
 
 		if ( ! $this->is_valid( $post ) ) {
+			debug_log( '[Share on Mastodon] Skipping post.' );
 			return;
 		}
 
@@ -191,6 +219,14 @@ class Post_Handler {
 			$args['status'] = mb_substr( $args['status'], 0, 499, get_bloginfo( 'charset' ) ) . '…';
 		}
 
+		$content_warning = get_post_meta( $post->ID, '_share_on_mastodon_cw', true );
+		$content_warning = (string) apply_filters( 'share_on_mastodon_cw', $content_warning );
+
+		if ( '' !== $content_warning ) {
+			// May render hashtags or URLs, or unfiltered HTML, at the very end of a toot unusable.
+			$args['spoiler_text'] = sanitize_text_field( $content_warning );
+		}
+
 		// Encode, build query string.
 		$query_string = http_build_query( $args );
 
@@ -218,6 +254,8 @@ class Post_Handler {
 			}
 		}
 
+		debug_log( '[Share on Mastodon] Posting to Mastodon ...' );
+
 		$response = wp_safe_remote_post(
 			esc_url_raw( $options['mastodon_host'] . '/api/v1/statuses' ),
 			array(
@@ -241,6 +279,8 @@ class Post_Handler {
 		$status = json_decode( $response['body'] );
 
 		if ( ! empty( $status->url ) ) {
+			debug_log( "[Share on Mastodon] Post shared OK at {$status->url}." );
+
 			delete_post_meta( $post->ID, '_share_on_mastodon_error' );
 			update_post_meta( $post->ID, '_share_on_mastodon_url', esc_url_raw( $status->url ) );
 
@@ -259,6 +299,8 @@ class Post_Handler {
 			// Provided debugging's enabled, let's store the (somehow faulty) response.
 			debug_log( $response );
 		}
+
+		debug_log( '[Share on Mastodon] All done!' );
 	}
 
 	/**
@@ -312,6 +354,17 @@ class Post_Handler {
 			<?php esc_html_e( 'Share on Mastodon', 'share-on-mastodon' ); ?>
 		</label>
 		<?php
+		if ( ! empty( $options['content_warning'] ) ) :
+			// Content warning saved earlier, if any.
+			$content_warning = get_post_meta( $post->ID, '_share_on_mastodon_cw', true );
+			?>
+			<div style="margin-top: 1em;">
+				<label for="share_on_mastodon_cw"><?php esc_html_e( '(Optional) Content Warning', 'share-on-mastodon' ); ?></label>
+				<input type="text" id="share_on_mastodon_cw" name="share_on_mastodon_cw" style="width: 100%; box-sizing: border-box; margin-top: 0.5em;" value="<?php echo esc_attr( trim( $content_warning ) ); ?>" />
+			</div>
+			<?php
+		endif;
+
 		if ( ! empty( $options['custom_status_field'] ) ) :
 			// Custom message saved earlier, if any.
 			$custom_status = get_post_meta( $post->ID, '_share_on_mastodon_status', true );
@@ -322,7 +375,7 @@ class Post_Handler {
 			}
 			?>
 			<div style="margin-top: 1em;">
-				<label for="share_on_mastodon_status"><?php esc_html_e( '(Optional) Message', 'share-on-mastodon' ); ?></label>
+				<label for="share_on_mastodon_status"><?php esc_html_e( '(Optional) Custom Message', 'share-on-mastodon' ); ?></label>
 				<textarea id="share_on_mastodon_status" name="share_on_mastodon_status" rows="3" style="width: 100%; box-sizing: border-box; margin-top: 0.5em;"><?php echo esc_html( trim( $custom_status ) ); ?></textarea>
 				<p class="description" style="margin-top: 0.25em;"><?php esc_html_e( 'Customize this post&rsquo;s Mastodon status.', 'share-on-mastodon' ); ?></p>
 			</div>
@@ -430,6 +483,7 @@ class Post_Handler {
 				'nonce'               => wp_create_nonce( basename( __FILE__ ) ),
 				'ajaxurl'             => esc_url_raw( admin_url( 'admin-ajax.php' ) ),
 				'custom_status_field' => ! empty( $options['custom_status_field'] ) ? '1' : '0',
+				'content_warning'     => ! empty( $options['content_warning'] ) ? '1' : '0',
 			)
 		);
 	}
@@ -443,11 +497,13 @@ class Post_Handler {
 	protected function is_valid( $post ) {
 		if ( 'publish' !== $post->post_status ) {
 			// Status is something other than `publish`.
+			debug_log( '[Share on Mastodon] Post not public.' );
 			return false;
 		}
 
 		if ( post_password_required( $post ) ) {
 			// Post is password-protected.
+			debug_log( '[Share on Mastodon] Post password-protected.' );
 			return false;
 		}
 
@@ -455,17 +511,20 @@ class Post_Handler {
 
 		if ( ! in_array( $post->post_type, (array) $options['post_types'], true ) ) {
 			// Unsupported post type.
+			debug_log( '[Share on Mastodon] Unsupported post type.' );
 			return false;
 		}
 
 		if ( '' !== get_post_meta( $post->ID, '_share_on_mastodon_url', true ) ) {
 			// Was shared before (and not "unlinked").
+			debug_log( '[Share on Mastodon] Post shared before.' );
 			return false;
 		}
 
 		if ( is_older_than( DAY_IN_SECONDS / 2, $post ) && '1' !== get_post_meta( $post->ID, '_share_on_mastodon', true ) ) {
 			// Unless the box was ticked explicitly, we won't share "older" posts. Since v0.13.0, sharing "older" posts
 			// is "opt-in," always.
+			debug_log( '[Share on Mastodon] Preventing older post from being shared automatically.' );
 			return false;
 		}
 
@@ -544,8 +603,10 @@ class Post_Handler {
 		if ( $shortened === $excerpt ) {
 			// Might as well done nothing.
 			return $orig;
+		} elseif ( '…' !== mb_substr( $shortened, -1 ) ) { // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedElseif
+			// Final char is a horizontal ellipsis. Do nothing, haha.
 		} elseif ( ctype_punct( mb_substr( $shortened, -1 ) ) ) {
-			// Final char is a "punctuation" character.
+			// Final char is a "punctuation" character but not an ellipsis.
 			$shortened .= ' …';
 		} else {
 			$shortened .= '…';
@@ -614,6 +675,10 @@ class Post_Handler {
 	protected function is_gutenberg() {
 		if ( ! defined( 'REST_REQUEST' ) || ! REST_REQUEST ) {
 			// Not a REST request.
+			return false;
+		}
+
+		if ( wp_doing_cron() ) {
 			return false;
 		}
 
