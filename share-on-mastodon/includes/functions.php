@@ -47,6 +47,16 @@ function get_options( $user_id = 0 ) {
  * @return int         The found post ID, or 0 on failure.
  */
 function attachment_url_to_postid( $url ) {
+	if ( str_starts_with( $url, 'data:' ) ) {
+		// Nothing to do.
+		return 0;
+	}
+
+	if ( strlen( $url ) > ( 2 * 2084 ) ) {
+		// 2,084 is sometimes seen as a practical maximum URL length, so anything over *twice* that is likely not a URL.
+		return 0;
+	}
+
 	global $wpdb;
 
 	$dir  = wp_get_upload_dir();
@@ -64,24 +74,29 @@ function attachment_url_to_postid( $url ) {
 		$path = substr( $path, strlen( $dir['baseurl'] . '/' ) );
 	}
 
-	$filename = pathinfo( $path, PATHINFO_FILENAME ); // The bit before the (last) file extension (if any).
+	$extension           = pathinfo( $path, PATHINFO_EXTENSION );
+	$path_sans_extension = ! empty( $extension )
+		? preg_replace( "~\.{$extension}$~", '', $path )
+		: $path;
 
 	$sql = $wpdb->prepare(
-		"SELECT post_id, meta_value FROM $wpdb->postmeta WHERE meta_key = '_wp_attached_file' AND meta_value REGEXP %s",
-		str_replace( $filename, "$filename(-scaled)*", $path ) // This is really the only change here.
+		"SELECT post_id, meta_value FROM $wpdb->postmeta WHERE meta_key = '_wp_attached_file' AND (meta_value = %s OR meta_value = %s OR meta_value = %s) LIMIT 1",
+		$path,
+		"{$path_sans_extension}-scaled" . ( ! empty( $extension ) ? ".{$extension}" : '' ),
+		"{$path_sans_extension}-rotated" . ( ! empty( $extension ) ? ".{$extension}" : '' )
 	);
 
 	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared
 	$results = $wpdb->get_results( $sql );
-	$post_id = null;
+	$post_id = 0;
 
 	if ( $results ) {
-		// Use the first available result, but prefer a case-sensitive match, if exists.
 		$post_id = reset( $results )->post_id;
 
 		if ( count( $results ) > 1 ) {
 			foreach ( $results as $result ) {
 				if ( $path === $result->meta_value ) {
+					// If a case-sensitive match exists, use that instead.
 					$post_id = $result->post_id;
 					break;
 				}
