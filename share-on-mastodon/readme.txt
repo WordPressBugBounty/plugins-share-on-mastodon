@@ -1,8 +1,8 @@
 === Share on Mastodon ===
 Contributors: janboddez
-Tags: mastodon, social, fediverse, syndication, posse
-Tested up to: 6.8
-Stable tag: 0.19.4
+Tags: mastodon, syndication, fediverse, posse, adopt-me
+Tested up to: 6.9
+Stable tag: 0.20.1
 License: GNU General Public License v3.0
 License URI: https://www.gnu.org/licenses/gpl-3.0.html
 
@@ -28,6 +28,12 @@ After activation, head over to *Settings > Share on Mastodon* to authorize WordP
 More detailed instructions can be found on [this plugin's web page](https://jan.boddez.net/wordpress/share-on-mastodon).
 
 == Changelog ==
+= 0.20.1 =
+Fix post screen `%category%` template tag.
+
+= 0.20.0 =
+Support for PKCE.
+
 = 0.19.4 =
 Added the `%category%` "template tag" to share a post's _first_ category _as a hashtag_.
 

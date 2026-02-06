@@ -58,8 +58,11 @@ class Post_Handler {
 
 		// Sanitize custom status, if any.
 		if ( isset( $_POST['share_on_mastodon_status'] ) ) {
-			$status = sanitize_textarea_field( wp_unslash( $_POST['share_on_mastodon_status'] ) );
-			$status = preg_replace( '~\R~u', "\r\n", $status );
+			// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+			$status = str_replace( '%category%', '%yrogetac%', wp_unslash( $_POST['share_on_mastodon_status'] ) );
+			$status = sanitize_textarea_field( $status ); // Sanitize after having replaced `%category%` to prevent WP from stripping out `%ca`.
+			$status = str_replace( '%yrogetac%', '%category%', $status ); // Undo what we did before.
+			$status = preg_replace( '~\R~u', "\r\n", $status ); // Normalize line endings.
 		}
 
 		if (
@@ -79,7 +82,7 @@ class Post_Handler {
 		}
 
 		if ( ! empty( $content_warning ) && '' !== preg_replace( '~\s~', '', $content_warning ) ) {
-			// Save only if `$content_warning` is non-empty and.
+			// Save only if `$content_warning` is non-empty.
 			update_post_meta( $post->ID, '_share_on_mastodon_cw', $content_warning );
 		} else {
 			// Ignore, or delete a previously stored value.
@@ -135,12 +138,12 @@ class Post_Handler {
 			return;
 		}
 
-		if ( ! $this->setup_completed( $post ) ) {
-			debug_log( '[Share on Mastodon] Setup incomplete.' );
+		if ( ! $this->is_valid( $post ) ) {
 			return;
 		}
 
-		if ( ! $this->is_valid( $post ) ) {
+		if ( ! $this->setup_completed( $post ) ) {
+			debug_log( '[Share on Mastodon] Setup incomplete.' );
 			return;
 		}
 
@@ -566,7 +569,7 @@ class Post_Handler {
 		$status = preg_replace( '~(\r\n){2,}~', "\r\n\r\n", $status ); // We should have normalized line endings by now.
 		$status = sanitize_textarea_field( $status ); // Strips HTML and whatnot.
 
-		// Add the (escaped) URL after the everything else has been sanitized, so as not to garble permalinks with
+		// Add the (escaped) URL after everything else has been sanitized, so as not to garble permalinks with
 		// multi-byte characters in them.
 		$status = str_replace( '%permalink%', esc_url_raw( get_permalink( $post_id ) ), $status );
 
@@ -630,9 +633,9 @@ class Post_Handler {
 			foreach ( $tags as $tag ) {
 				$tag_name = $tag->name;
 
-				if ( preg_match( '/(\s|-)+/', $tag_name ) ) {
+				if ( preg_match( '/(\s|-|\.)+/', $tag_name ) ) {
 					// Try to "CamelCase" multi-word tags.
-					$tag_name = preg_replace( '~(\s|-)+~', ' ', $tag_name );
+					$tag_name = preg_replace( '~(\s|-|\.)+~', ' ', $tag_name );
 					$tag_name = explode( ' ', $tag_name );
 					$tag_name = implode( '', array_map( 'ucfirst', $tag_name ) );
 				}
@@ -660,9 +663,9 @@ class Post_Handler {
 		// Grab the first category.
 		$cat_name = $cats[0]->cat_name;
 
-		if ( preg_match( '/(\s|-)+/', $cat_name ) ) {
+		if ( preg_match( '/(\s|-|\.)+/', $cat_name ) ) {
 			// Try to "CamelCase" multi-word categories.
-			$cat_name = preg_replace( '~(\s|-)+~', ' ', $cat_name );
+			$cat_name = preg_replace( '~(\s|-|\.)+~', ' ', $cat_name );
 			$cat_name = explode( ' ', $cat_name );
 			$cat_name = implode( '', array_map( 'ucfirst', $cat_name ) );
 		}
